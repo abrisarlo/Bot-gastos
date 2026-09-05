@@ -5,7 +5,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 
 import sheets_manager as db
-from parser import parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso
+from parser import parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso, buscar_cuenta
 
 app = Flask(__name__)
 
@@ -42,7 +42,12 @@ def cmd_help():
         "/pendiente Descripcion - Monto - DD/MM/AAAA — algo que tenés que pagar\n"
         "/pendientes — lista lo que falta pagar\n"
         "/pagado ID — marca un pendiente como pagado\n"
-        "/planilla — te mando el link a la planilla de Google Sheets\n"
+        "/planilla — te mando el link a la planilla de Google Sheets\n\n"
+        "¿Te equivocaste en el último gasto?\n"
+        "/corregir cuenta galicia — le cambia la cuenta\n"
+        "/corregir monto 1500 — le cambia el monto\n"
+        "/corregir categoria super — le cambia la categoría\n"
+        "/deshacer — lo borra directamente\n"
     )
 
 
@@ -125,6 +130,45 @@ def cmd_pagado(texto_args):
     return f"No encontré el pendiente #{id_pendiente}."
 
 
+def cmd_corregir(texto_args):
+    campo, _, valor = texto_args.strip().partition(" ")
+    campo = campo.lower()
+    valor = valor.strip()
+    if not campo or not valor:
+        return ("Usá: /corregir cuenta galicia | /corregir monto 1500 | /corregir categoria super")
+
+    kwargs = {}
+    if campo == "cuenta":
+        cuenta = buscar_cuenta(valor)
+        if not cuenta:
+            return f"No reconozco esa cuenta: {valor}"
+        kwargs["nueva_cuenta"] = cuenta
+    elif campo == "monto":
+        monto = parsear_monto(valor)
+        if monto is None:
+            return "No encontré un monto ahí."
+        kwargs["nuevo_monto"] = monto
+    elif campo == "categoria":
+        kwargs["nueva_categoria"] = valor.capitalize()
+    else:
+        return "Los campos válidos son: cuenta, monto, categoria."
+
+    resultado = db.corregir_ultimo_gasto(**kwargs)
+    if resultado is None:
+        return "No encontré ningún gasto cargado este mes para corregir."
+    vieja, nueva = resultado
+    return (f"Corregido el último gasto:\n"
+            f"${vieja['monto']:,.2f} en {vieja['categoria']} ({vieja['cuenta']})\n"
+            f"→ ${nueva['monto']:,.2f} en {nueva['categoria']} ({nueva['cuenta']})")
+
+
+def cmd_deshacer():
+    info = db.deshacer_ultimo_gasto()
+    if info is None:
+        return "No encontré ningún gasto cargado este mes para deshacer."
+    return f"Borrado: ${info['monto']:,.2f} en {info['categoria']} ({info['cuenta']})."
+
+
 # ---------- Rutas ----------
 
 @app.route("/")
@@ -166,6 +210,10 @@ def webhook():
             respuesta = cmd_pendientes()
         elif comando == "/pagado":
             respuesta = cmd_pagado(args)
+        elif comando == "/corregir":
+            respuesta = cmd_corregir(args)
+        elif comando == "/deshacer":
+            respuesta = cmd_deshacer()
         elif comando == "/planilla":
             respuesta = f"Acá está: {db.url_planilla()}"
         else:

@@ -10,7 +10,7 @@ Ejemplos que entiende:
 """
 import re
 
-NUMERO_RE = re.compile(r"(\d+(?:[.,]\d+)?)")
+NUMERO_RE = re.compile(r"\d[\d.,]*\d|\d")
 EN_CATEGORIA_RE = re.compile(r"\ben\b\s+(.+)$", re.IGNORECASE)
 DE_CATEGORIA_RE = re.compile(r"\bde\b\s+(.+)$", re.IGNORECASE)
 AHORRO_RE = re.compile(r"\bahorr", re.IGNORECASE)
@@ -42,13 +42,43 @@ def es_ingreso(texto: str) -> bool:
     return bool(INGRESO_RE.search(texto))
 
 
+def _normalizar_numero(bruto: str) -> str:
+    """
+    Interpreta numeros como se escriben en Argentina:
+    "1.200.000" -> 1200000 (puntos de miles)
+    "1.200.000,50" -> 1200000.50 (coma decimal)
+    "1200,50" -> 1200.50
+    "12.50" -> 12.50 (un solo punto con 2 decimales = decimal, no de miles)
+    """
+    tiene_coma = "," in bruto
+    tiene_punto = "." in bruto
+
+    if tiene_coma and tiene_punto:
+        if bruto.rfind(",") > bruto.rfind("."):
+            # la coma es el separador decimal, los puntos son de miles
+            bruto = bruto.replace(".", "").replace(",", ".")
+        else:
+            # el punto es el separador decimal, las comas son de miles
+            bruto = bruto.replace(",", "")
+    elif tiene_coma:
+        bruto = bruto.replace(",", ".")
+    elif tiene_punto:
+        partes = bruto.split(".")
+        if len(partes) > 1 and len(partes[-1]) == 3:
+            # grupos de 3 digitos -> son separadores de miles
+            bruto = "".join(partes)
+        # si el ultimo grupo tiene 1 o 2 digitos, el punto ya es decimal: se deja igual
+
+    return bruto
+
+
 def parsear_monto(texto: str):
     """Devuelve solo el monto (float) encontrado en el texto, o None."""
     match = NUMERO_RE.search(texto)
     if not match:
         return None
     try:
-        return float(match.group(1).replace(",", "."))
+        return float(_normalizar_numero(match.group(0)))
     except ValueError:
         return None
 
@@ -59,6 +89,11 @@ def _buscar_cuenta(frase: str):
         if clave in frase_low:
             return SINONIMOS_CUENTA[clave]
     return None
+
+
+def buscar_cuenta(frase: str):
+    """Version publica de _buscar_cuenta, para usar desde comandos como /corregir."""
+    return _buscar_cuenta(frase)
 
 
 def parsear_gasto(texto: str):

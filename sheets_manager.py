@@ -210,6 +210,68 @@ def agregar_gasto(monto: float, categoria: str, descripcion: str, cuenta: str):
     modificar_saldo(cuenta, -monto)
 
 
+def _ultima_fila_gasto(ws):
+    """Datos de la ultima fila cargada en la tabla de gastos (A:E), o None si esta vacia."""
+    filas = ws.get("A2:E1000", value_render_option="UNFORMATTED_VALUE")
+    if not filas:
+        return None
+    numero_fila = len(filas) + 1  # +1 porque la fila 1 es el header
+    fila = filas[-1] + [""] * (5 - len(filas[-1]))
+    fecha, monto, categoria, descripcion, cuenta = fila
+    return {
+        "fila": numero_fila, "fecha": fecha, "monto": _a_float(monto),
+        "categoria": categoria, "descripcion": descripcion,
+        "cuenta": cuenta or "Efectivo",
+    }
+
+
+def ultimo_gasto_mes_actual():
+    sh = _spreadsheet()
+    ws = obtener_o_crear_hoja_mes(sh)
+    return _ultima_fila_gasto(ws)
+
+
+def corregir_ultimo_gasto(nuevo_monto=None, nueva_categoria=None, nueva_cuenta=None):
+    """Corrige el ultimo gasto cargado (monto, categoria y/o cuenta) y ajusta
+    los saldos de las cuentas para que reflejen el cambio. Devuelve
+    (info_vieja, info_nueva) o None si no habia ningun gasto cargado."""
+    sh = _spreadsheet()
+    ws = obtener_o_crear_hoja_mes(sh)
+    info = _ultima_fila_gasto(ws)
+    if info is None:
+        return None
+
+    fila = info["fila"]
+    monto_final = nuevo_monto if nuevo_monto is not None else info["monto"]
+    categoria_final = nueva_categoria if nueva_categoria is not None else info["categoria"]
+    cuenta_final = nueva_cuenta if nueva_cuenta is not None else info["cuenta"]
+
+    modificar_saldo(info["cuenta"], info["monto"])      # deshace el debito viejo
+    modificar_saldo(cuenta_final, -monto_final)          # aplica el debito nuevo
+
+    ws.update(values=[[monto_final, categoria_final]], range_name=f"B{fila}:C{fila}")
+    ws.update(values=[[cuenta_final]], range_name=f"E{fila}")
+    _recalcular_resumen(ws)
+
+    nueva_info = dict(info, monto=monto_final, categoria=categoria_final, cuenta=cuenta_final)
+    return info, nueva_info
+
+
+def deshacer_ultimo_gasto():
+    """Borra el ultimo gasto cargado y revierte el debito de su cuenta.
+    Devuelve la info del gasto borrado, o None si no habia nada."""
+    sh = _spreadsheet()
+    ws = obtener_o_crear_hoja_mes(sh)
+    info = _ultima_fila_gasto(ws)
+    if info is None:
+        return None
+    fila = info["fila"]
+    modificar_saldo(info["cuenta"], info["monto"])
+    ws.batch_clear([f"A{fila}:E{fila}"])
+    _recalcular_resumen(ws)
+    return info
+
+
 def agregar_ahorro_manual(monto: float):
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
