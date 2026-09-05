@@ -9,6 +9,7 @@ Ejemplos que entiende:
   "ahorre 5000"                             -> ahorro manual
 """
 import re
+from datetime import date, timedelta
 
 NUMERO_RE = re.compile(r"\d[\d.,]*\d|\d")
 EN_CATEGORIA_RE = re.compile(r"\ben\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
@@ -19,6 +20,9 @@ TRANSFERENCIA_RE = re.compile(r"\btransfer|\btraspas", re.IGNORECASE)
 DE_A_RE = re.compile(r"\bde\s+(.+?)\s+\ba\b\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_RE = re.compile(r"\bcon\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_EN_RE = re.compile(r"\b(?:con|en)\s+(.+)$", re.IGNORECASE)
+ANTEAYER_RE = re.compile(r"\banteayer\b|\bantes\s+de\s+ayer\b", re.IGNORECASE)
+AYER_RE = re.compile(r"\bayer\b", re.IGNORECASE)
+FECHA_EXPLICITA_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b")
 
 # claves de busqueda (mas largas primero) -> nombre canonico de la cuenta
 SINONIMOS_CUENTA = {
@@ -121,19 +125,55 @@ def buscar_cuenta(frase: str):
     return _buscar_cuenta(frase)
 
 
+def parsear_fecha(texto: str):
+    """
+    Busca una fecha mencionada en el texto: "ayer", "anteayer", o una fecha
+    explicita tipo "3/9" o "03/09/2026". Devuelve (fecha_o_None, texto_sin_esa_parte).
+    Si no encuentra nada, fecha es None (se interpreta como "ahora").
+    """
+    m = ANTEAYER_RE.search(texto)
+    if m:
+        return date.today() - timedelta(days=2), (texto[:m.start()] + texto[m.end():]).strip()
+
+    m = AYER_RE.search(texto)
+    if m:
+        return date.today() - timedelta(days=1), (texto[:m.start()] + texto[m.end():]).strip()
+
+    m = FECHA_EXPLICITA_RE.search(texto)
+    if m:
+        dia, mes = int(m.group(1)), int(m.group(2))
+        anio_str = m.group(3)
+        anio = date.today().year
+        if anio_str:
+            anio = int(anio_str)
+            if anio < 100:
+                anio += 2000
+        try:
+            fecha = date(anio, mes, dia)
+        except ValueError:
+            return None, texto
+        return fecha, (texto[:m.start()] + texto[m.end():]).strip()
+
+    return None, texto
+
+
 def parsear_gasto(texto: str):
     """
-    Devuelve (monto, categoria, descripcion, cuenta) o None si no encuentra un monto.
+    Devuelve (monto, categoria, descripcion, cuenta, fecha) o None si no encuentra un monto.
     La cuenta se indica con "... con <cuenta>" (para no chocar con "en <categoria>").
+    La fecha (opcional) se indica con "ayer", "anteayer" o "3/9" / "03/09/2026"; si no se
+    menciona ninguna, fecha viene None (se usa el momento actual).
     """
-    texto_para_monto_categoria = texto
+    fecha, texto_sin_fecha = parsear_fecha(texto)
+
+    texto_para_monto_categoria = texto_sin_fecha
     cuenta = CUENTA_DEFAULT
-    m_cuenta = CUENTA_CON_RE.search(texto)
+    m_cuenta = CUENTA_CON_RE.search(texto_sin_fecha)
     if m_cuenta:
         encontrada = _buscar_cuenta(m_cuenta.group(1))
         if encontrada:
             cuenta = encontrada
-            texto_para_monto_categoria = texto[:m_cuenta.start()].strip()
+            texto_para_monto_categoria = texto_sin_fecha[:m_cuenta.start()].strip()
 
     monto = parsear_monto(texto_para_monto_categoria)
     if monto is None:
@@ -152,7 +192,7 @@ def parsear_gasto(texto: str):
     elif m_de:
         categoria = m_de.group(1).capitalize()
 
-    return monto, categoria, texto.strip(), cuenta
+    return monto, categoria, texto.strip(), cuenta, fecha
 
 
 def parsear_transferencia(texto: str):
@@ -176,19 +216,22 @@ def parsear_transferencia(texto: str):
 
 def parsear_ingreso(texto: str):
     """
-    Devuelve (monto, cuenta, descripcion) o None si no encuentra un monto.
+    Devuelve (monto, cuenta, descripcion, fecha) o None si no encuentra un monto.
     La cuenta se indica con "... en <cuenta>" o "... con <cuenta>".
+    La fecha (opcional) se indica con "ayer", "anteayer" o "3/9" / "03/09/2026".
     """
-    texto_para_monto = texto
+    fecha, texto_sin_fecha = parsear_fecha(texto)
+
+    texto_para_monto = texto_sin_fecha
     cuenta = CUENTA_DEFAULT
-    m_cuenta = CUENTA_CON_EN_RE.search(texto)
+    m_cuenta = CUENTA_CON_EN_RE.search(texto_sin_fecha)
     if m_cuenta:
         encontrada = _buscar_cuenta(m_cuenta.group(1))
         if encontrada:
             cuenta = encontrada
-            texto_para_monto = texto[:m_cuenta.start()].strip()
+            texto_para_monto = texto_sin_fecha[:m_cuenta.start()].strip()
 
     monto = parsear_monto(texto_para_monto)
     if monto is None:
         return None
-    return monto, cuenta, texto.strip()
+    return monto, cuenta, texto.strip(), fecha

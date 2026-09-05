@@ -201,26 +201,34 @@ def _recalcular_resumen(ws):
     return total_gastado, ingreso, ahorro_sobrante, ahorro_manual, ahorro_total, filas_categoria
 
 
-def agregar_gasto(monto: float, categoria: str, descripcion: str, cuenta: str):
+def agregar_gasto(monto: float, categoria: str, descripcion: str, cuenta: str, fecha=None):
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
-    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ws.append_row([fecha, monto, categoria, descripcion, cuenta], value_input_option="USER_ENTERED", table_range="A1")
+    if fecha is not None:
+        fecha_str = fecha.strftime("%d/%m/%Y") + " " + datetime.now().strftime("%H:%M")
+    else:
+        fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ws.append_row([fecha_str, monto, categoria, descripcion, cuenta], value_input_option="USER_ENTERED", table_range="A1")
     _recalcular_resumen(ws)
     modificar_saldo(cuenta, -monto)
 
 
 def _todos_los_gastos(ws):
-    """Todas las filas de la tabla de gastos (A:E), con su numero de fila real."""
-    filas = ws.get("A2:E1000", value_render_option="UNFORMATTED_VALUE")
+    """Todas las filas de la tabla de gastos (A:E), con su numero de fila real.
+    La fecha se lee por separado con formato normal (texto legible); el resto,
+    sin formato, para que los montos no vengan como '$1,234.00' en texto."""
+    fechas = ws.get("A2:A1000")
+    resto = ws.get("B2:E1000", value_render_option="UNFORMATTED_VALUE")
+    n = max(len(fechas), len(resto))
     resultado = []
-    for i, fila in enumerate(filas, start=2):  # la fila 1 es el header
-        if not fila or fila[0] == "":
+    for i in range(n):
+        fecha = fechas[i][0] if i < len(fechas) and fechas[i] else ""
+        datos_resto = (resto[i] if i < len(resto) else []) + ["", "", "", ""]
+        monto, categoria, descripcion, cuenta = datos_resto[:4]
+        if fecha == "" and monto == "" and categoria == "" and descripcion == "":
             continue
-        fila = fila + [""] * (5 - len(fila))
-        fecha, monto, categoria, descripcion, cuenta = fila
         resultado.append({
-            "fila": i, "fecha": fecha, "monto": _a_float(monto),
+            "fila": i + 2, "fecha": fecha, "monto": _a_float(monto),
             "categoria": categoria, "descripcion": descripcion,
             "cuenta": cuenta or "Efectivo",
         })
@@ -235,11 +243,13 @@ def listar_gastos_mes(n=10):
 
 
 def _gasto_por_fila(ws, fila):
-    valores = ws.get(f"A{fila}:E{fila}", value_render_option="UNFORMATTED_VALUE")
-    if not valores or not valores[0] or valores[0][0] == "":
+    fecha_val = ws.get(f"A{fila}:A{fila}")
+    resto_val = ws.get(f"B{fila}:E{fila}", value_render_option="UNFORMATTED_VALUE")
+    fecha = fecha_val[0][0] if fecha_val and fecha_val[0] else ""
+    if fecha == "":
         return None
-    datos = valores[0] + [""] * (5 - len(valores[0]))
-    fecha, monto, categoria, descripcion, cuenta = datos
+    datos = (resto_val[0] if resto_val else []) + ["", "", "", ""]
+    monto, categoria, descripcion, cuenta = datos[:4]
     return {
         "fila": fila, "fecha": fecha, "monto": _a_float(monto),
         "categoria": categoria, "descripcion": descripcion,
@@ -330,11 +340,14 @@ def agregar_ahorro_manual(monto: float):
     _recalcular_resumen(ws)
 
 
-def agregar_ingreso(monto: float, cuenta: str, descripcion: str):
+def agregar_ingreso(monto: float, cuenta: str, descripcion: str, fecha=None):
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
-    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ws.append_row([fecha, monto, cuenta, descripcion], value_input_option="USER_ENTERED", table_range="M1")
+    if fecha is not None:
+        fecha_str = fecha.strftime("%d/%m/%Y") + " " + datetime.now().strftime("%H:%M")
+    else:
+        fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ws.append_row([fecha_str, monto, cuenta, descripcion], value_input_option="USER_ENTERED", table_range="M1")
     _recalcular_resumen(ws)
     modificar_saldo(cuenta, monto)
 

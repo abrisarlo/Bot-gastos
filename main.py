@@ -37,6 +37,7 @@ def cmd_help():
         "Te entiendo si me escribís en texto libre, por ejemplo:\n"
         "<i>gaste 500 en comida</i> (cuenta Efectivo por default)\n"
         "<i>gaste 500 en comida con galicia</i>\n"
+        "<i>gaste 500 en comida ayer</i> (o \"anteayer\", o una fecha tipo \"3/9\")\n"
         "<i>cobre 300000 en mercado pago</i>\n"
         "<i>transferi 5000 de efectivo a galicia</i>\n"
         "<i>ahorre 5000</i>\n\n"
@@ -176,12 +177,19 @@ def cmd_gastos(texto_args):
     return "\n".join(lineas)
 
 
+def _sin_tilde(texto: str) -> str:
+    """Normaliza tildes basicas para que 'categoria' y 'categoría' sean lo mismo."""
+    return (texto.lower()
+            .replace("á", "a").replace("é", "e").replace("í", "i")
+            .replace("ó", "o").replace("ú", "u"))
+
+
 def _resolver_selector(primer_token, resto):
     """Interpreta el primer token de /corregir o /deshacer: un numero de fila,
     'categoria:X', o nada (afecta al ultimo gasto). Devuelve (tipo, valor, resto_sin_selector)."""
     if primer_token.isdigit():
         return "id", int(primer_token), resto
-    if primer_token.lower().startswith("categoria:"):
+    if _sin_tilde(primer_token).startswith("categoria:"):
         return "categoria", primer_token.split(":", 1)[1], resto
     return "ultimo", None, (primer_token + " " + resto).strip()
 
@@ -189,12 +197,12 @@ def _resolver_selector(primer_token, resto):
 def cmd_corregir(texto_args):
     primer_token, _, resto = texto_args.strip().partition(" ")
 
-    # "categoria:X" (con o sin espacio despues de los dos puntos) es ambiguo:
-    # casi siempre el usuario quiere "cambiale la categoria a X" (afecta al
-    # ultimo gasto), no "busca el gasto que ya tiene esa categoria". Solo lo
-    # tratamos como selector cuando ademas viene claramente pegado un campo
-    # despues (ej: "categoria:comida cuenta galicia").
-    if primer_token.lower().startswith("categoria:"):
+    # "categoria:X" (con o sin espacio despues de los dos puntos, con o sin
+    # tilde) es ambiguo: casi siempre el usuario quiere "cambiale la
+    # categoria a X" (afecta al ultimo gasto), no "busca el gasto que ya
+    # tiene esa categoria". Solo lo tratamos como selector cuando ademas
+    # viene claramente pegado un campo despues (ej: "categoria:comida cuenta galicia").
+    if _sin_tilde(primer_token).startswith("categoria:"):
         valor_pegado = primer_token.split(":", 1)[1].strip()
         if valor_pegado and resto.strip():
             selector_tipo, selector_valor, campo_valor = "categoria", valor_pegado, resto
@@ -206,7 +214,7 @@ def cmd_corregir(texto_args):
         selector_tipo, selector_valor, campo_valor = _resolver_selector(primer_token, resto)
 
     campo, _, valor = campo_valor.strip().partition(" ")
-    campo = campo.lower()
+    campo = _sin_tilde(campo).rstrip(":")
     valor = valor.strip()
 
     if campo in ("cuenta", "monto", "categoria") and valor:
@@ -368,18 +376,20 @@ def webhook():
         if resultado is None:
             respuesta = "No encontré ningún monto ahí. Ej: <i>cobre 300000 en galicia</i>"
         else:
-            monto, cuenta, descripcion = resultado
-            db.agregar_ingreso(monto, cuenta, descripcion)
-            respuesta = f"Anotado: ingreso de ${monto:,.2f} en {cuenta}."
+            monto, cuenta, descripcion, fecha = resultado
+            db.agregar_ingreso(monto, cuenta, descripcion, fecha=fecha)
+            aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
+            respuesta = f"Anotado: ingreso de ${monto:,.2f} en {cuenta}{aviso_fecha}."
     else:
         resultado = parsear_gasto(texto)
         if resultado is None:
             respuesta = ("No encontré ningún monto en tu mensaje. "
                          "Escribí algo como: <i>gaste 500 en comida</i>")
         else:
-            monto, categoria, descripcion, cuenta = resultado
-            db.agregar_gasto(monto, categoria, descripcion, cuenta)
-            respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta})."
+            monto, categoria, descripcion, cuenta, fecha = resultado
+            db.agregar_gasto(monto, categoria, descripcion, cuenta, fecha=fecha)
+            aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
+            respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta}){aviso_fecha}."
 
     enviar_mensaje(respuesta, chat_id)
     return jsonify(ok=True)
