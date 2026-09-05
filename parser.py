@@ -11,8 +11,8 @@ Ejemplos que entiende:
 import re
 
 NUMERO_RE = re.compile(r"\d[\d.,]*\d|\d")
-EN_CATEGORIA_RE = re.compile(r"\ben\b\s+(.+)$", re.IGNORECASE)
-DE_CATEGORIA_RE = re.compile(r"\bde\b\s+(.+)$", re.IGNORECASE)
+EN_CATEGORIA_RE = re.compile(r"\ben\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
+DE_CATEGORIA_RE = re.compile(r"\bde\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
 AHORRO_RE = re.compile(r"\bahorr", re.IGNORECASE)
 INGRESO_RE = re.compile(r"\b(cobr|ingres|deposit|recib)", re.IGNORECASE)
 CUENTA_CON_RE = re.compile(r"\bcon\s+(.+)$", re.IGNORECASE)
@@ -91,6 +91,25 @@ def _buscar_cuenta(frase: str):
     return None
 
 
+def buscar_todas_cuentas(texto: str):
+    """Devuelve TODAS las cuentas mencionadas en el texto, en el orden en que aparecen
+    (util para sugerir un /corregir cuando el usuario escribio en lenguaje libre)."""
+    texto_low = texto.lower()
+    posiciones = []
+    for clave, nombre in SINONIMOS_CUENTA.items():
+        idx = texto_low.find(clave)
+        if idx != -1:
+            posiciones.append((idx, nombre))
+    posiciones.sort(key=lambda x: x[0])
+    vistos = set()
+    resultado = []
+    for _, nombre in posiciones:
+        if nombre not in vistos:
+            vistos.add(nombre)
+            resultado.append(nombre)
+    return resultado
+
+
 def buscar_cuenta(frase: str):
     """Version publica de _buscar_cuenta, para usar desde comandos como /corregir."""
     return _buscar_cuenta(frase)
@@ -118,9 +137,9 @@ def parsear_gasto(texto: str):
     m_en = EN_CATEGORIA_RE.search(texto_para_monto_categoria)
     m_de = DE_CATEGORIA_RE.search(texto_para_monto_categoria)
     if m_en:
-        categoria = m_en.group(1).strip().capitalize()
+        categoria = m_en.group(1).capitalize()
     elif m_de:
-        categoria = m_de.group(1).strip().capitalize()
+        categoria = m_de.group(1).capitalize()
 
     return monto, categoria, texto.strip(), cuenta
 
