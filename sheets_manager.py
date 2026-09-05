@@ -364,7 +364,7 @@ def rollover_si_corresponde():
     sh = _spreadsheet()
     nombre_actual = _nombre_mes_actual()
     titulos = [ws.title for ws in sh.worksheets()
-               if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS, TRANSFERENCIAS)]
+               if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS, TRANSFERENCIAS, POR_COBRAR)]
 
     if nombre_actual in titulos:
         return None
@@ -432,6 +432,63 @@ def marcar_pagado(id_pendiente: int) -> bool:
     celdas = ws.findall(str(id_pendiente), in_column=1)
     for c in celdas:
         if str(ws.cell(c.row, 1).value) == str(id_pendiente):
+            ws.update_cell(c.row, 5, "Si")
+            return True
+    return False
+
+
+# ---------- Por cobrar (plata que te deben a vos) ----------
+
+POR_COBRAR = "PorCobrar"
+COLS_POR_COBRAR = ["ID", "Descripcion", "Monto", "Quien", "Cobrado"]
+
+
+def _hoja_por_cobrar(sh):
+    for ws in sh.worksheets():
+        if ws.title == POR_COBRAR:
+            return ws
+    ws = sh.add_worksheet(title=POR_COBRAR, rows=200, cols=6)
+    ws.update(values=[COLS_POR_COBRAR], range_name="A1:E1")
+    ws.format("A1:E1", {"textFormat": {"bold": True}})
+    return ws
+
+
+def agregar_por_cobrar(descripcion: str, monto: float, quien: str = ""):
+    sh = _spreadsheet()
+    ws = _hoja_por_cobrar(sh)
+    filas = ws.get("A2:A1000")
+    ids = [int(f[0]) for f in filas if f and str(f[0]).isdigit()]
+    nuevo_id = (max(ids) + 1) if ids else 1
+    ws.append_row([nuevo_id, descripcion, monto, quien, "No"],
+                  value_input_option="USER_ENTERED", table_range="A1")
+    return nuevo_id
+
+
+def listar_por_cobrar(solo_no_cobrados=True):
+    sh = _spreadsheet()
+    ws = _hoja_por_cobrar(sh)
+    filas = ws.get("A2:E1000", value_render_option="UNFORMATTED_VALUE")
+    resultado = []
+    for f in filas:
+        if not f or f[0] == "":
+            continue
+        f = f + [""] * (5 - len(f))
+        id_, desc, monto, quien, cobrado = f
+        if solo_no_cobrados and cobrado == "Si":
+            continue
+        resultado.append({
+            "id": int(id_), "descripcion": desc, "monto": _a_float(monto),
+            "quien": quien, "cobrado": cobrado,
+        })
+    return resultado
+
+
+def marcar_cobrado(id_cobrar: int) -> bool:
+    sh = _spreadsheet()
+    ws = _hoja_por_cobrar(sh)
+    celdas = ws.findall(str(id_cobrar), in_column=1)
+    for c in celdas:
+        if str(ws.cell(c.row, 1).value) == str(id_cobrar):
             ws.update_cell(c.row, 5, "Si")
             return True
     return False

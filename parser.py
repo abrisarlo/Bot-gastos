@@ -12,11 +12,13 @@ import re
 from datetime import date, timedelta
 
 NUMERO_RE = re.compile(r"\d[\d.,]*\d|\d")
-EN_CATEGORIA_RE = re.compile(r"\ben\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
-DE_CATEGORIA_RE = re.compile(r"\bde\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
+ARTICULO = r"(?:el|la|los|las|un|una|unos|unas)\s+"
+EN_CATEGORIA_RE = re.compile(rf"\ben\b\s+(?:{ARTICULO})?([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
+DE_CATEGORIA_RE = re.compile(rf"\bde\b\s+(?:{ARTICULO})?([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
 AHORRO_RE = re.compile(r"\bahorr", re.IGNORECASE)
 INGRESO_RE = re.compile(r"\b(cobr|ingres|deposit|recib)", re.IGNORECASE)
 TRANSFERENCIA_RE = re.compile(r"\btransfer|\btraspas", re.IGNORECASE)
+PENDIENTE_RE = re.compile(r"\bpendient", re.IGNORECASE)
 DE_A_RE = re.compile(r"\bde\s+(.+?)\s+\ba\b\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_RE = re.compile(r"\bcon\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_EN_RE = re.compile(r"\b(?:con|en)\s+(.+)$", re.IGNORECASE)
@@ -39,6 +41,37 @@ SINONIMOS_CUENTA = {
 }
 CUENTA_DEFAULT = "Efectivo"
 
+# Palabras que se agrupan bajo una categoria mas general.
+# Si una palabra no esta acá, se usa tal cual (capitalizada).
+CATEGORIA_SINONIMOS = {
+    # Transporte
+    "uber": "Transporte", "cabify": "Transporte", "subte": "Transporte",
+    "colectivo": "Transporte", "bondi": "Transporte", "taxi": "Transporte",
+    "nafta": "Transporte", "combustible": "Transporte", "peaje": "Transporte",
+    "sube": "Transporte", "tren": "Transporte",
+    # Supermercado / comida
+    "super": "Supermercado", "supermercado": "Supermercado", "coto": "Supermercado",
+    "carrefour": "Supermercado", "dia": "Supermercado", "jumbo": "Supermercado",
+    "almacen": "Supermercado", "verduleria": "Supermercado", "kiosco": "Supermercado",
+    "comida": "Comida", "delivery": "Comida", "restaurant": "Comida",
+    "restaurante": "Comida", "pedidosya": "Comida", "rappi": "Comida",
+    # Servicios / hogar
+    "luz": "Servicios", "gas": "Servicios", "agua": "Servicios", "internet": "Servicios",
+    "telefono": "Servicios", "celular": "Servicios", "expensas": "Servicios",
+    "alquiler": "Hogar", "limpieza": "Hogar",
+    # Entretenimiento
+    "netflix": "Streaming", "spotify": "Streaming", "disney": "Streaming",
+    "hbo": "Streaming", "cine": "Entretenimiento", "salidas": "Entretenimiento",
+    "birras": "Entretenimiento", "cerveza": "Entretenimiento", "bar": "Entretenimiento",
+    # Salud
+    "farmacia": "Salud", "medico": "Salud", "dentista": "Salud", "obra": "Salud",
+}
+
+
+def _normalizar_categoria(palabra: str) -> str:
+    clave = palabra.strip().lower()
+    return CATEGORIA_SINONIMOS.get(clave, palabra.capitalize())
+
 
 def es_ahorro(texto: str) -> bool:
     return bool(AHORRO_RE.search(texto))
@@ -50,6 +83,12 @@ def es_ingreso(texto: str) -> bool:
 
 def es_transferencia(texto: str) -> bool:
     return bool(TRANSFERENCIA_RE.search(texto))
+
+
+def es_mencion_pendiente(texto: str) -> bool:
+    """Detecta si el mensaje menciona 'pendiente' en lenguaje libre (no como
+    comando), para no confundirlo con un gasto normal."""
+    return bool(PENDIENTE_RE.search(texto))
 
 
 def _normalizar_numero(bruto: str) -> str:
@@ -157,6 +196,12 @@ def parsear_fecha(texto: str):
     return None, texto
 
 
+def normalizar_categoria(palabra: str) -> str:
+    """Version publica de _normalizar_categoria, para usarla al confirmar
+    una categoria que el usuario responde despues de una pregunta del bot."""
+    return _normalizar_categoria(palabra)
+
+
 def parsear_gasto(texto: str):
     """
     Devuelve (monto, categoria, descripcion, cuenta, fecha) o None si no encuentra un monto.
@@ -188,9 +233,9 @@ def parsear_gasto(texto: str):
         # (ej. "en wallbit"), no es una categoria real -> la descartamos
         candidato_en = None
     if candidato_en:
-        categoria = candidato_en.capitalize()
+        categoria = _normalizar_categoria(candidato_en)
     elif m_de:
-        categoria = m_de.group(1).capitalize()
+        categoria = _normalizar_categoria(m_de.group(1))
 
     return monto, categoria, texto.strip(), cuenta, fecha
 

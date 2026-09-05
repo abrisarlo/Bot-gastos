@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime
 
@@ -6,7 +7,8 @@ from flask import Flask, request, jsonify
 
 import sheets_manager as db
 from parser import (parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso,
-                     buscar_cuenta, buscar_todas_cuentas, es_transferencia, parsear_transferencia)
+                     buscar_cuenta, buscar_todas_cuentas, es_transferencia, parsear_transferencia,
+                     es_mencion_pendiente, normalizar_categoria)
 
 app = Flask(__name__)
 
@@ -20,6 +22,12 @@ API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 # reintenta mandar el mismo mensaje (pasa cuando el servidor tarda en responder).
 _UPDATES_PROCESADOS = set()
 _UPDATES_MAX = 500
+
+# Cuando el bot no esta seguro de la categoria, pregunta y espera la
+# respuesta en el proximo mensaje de ese chat, en vez de adivinar.
+# chat_id -> {"monto":, "descripcion":, "cuenta":, "fecha":, "ts": epoch}
+_PENDIENTE_CATEGORIA = {}
+_PENDIENTE_TTL_SEG = 10 * 60
 
 
 def enviar_mensaje(texto, chat_id=None):
@@ -47,9 +55,12 @@ def cmd_help():
         "/saldos — cuánto tenés en cada cuenta y lo invertido\n"
         "/invertir Monto — suma plata a tu saldo invertido\n"
         "/rendimiento Monto — anota lo que rindió lo invertido este mes\n"
-        "/pendiente Descripcion - Monto - DD/MM/AAAA — algo que tenés que pagar\n"
+        "/pendiente Descripcion - Monto - DD/MM/AAAA — algo que VOS tenés que pagar\n"
         "/pendientes — lista lo que falta pagar\n"
         "/pagado ID — marca un pendiente como pagado\n"
+        "/cobrar Descripcion - Monto - Quien — plata que te tienen que dar a vos\n"
+        "/porcobrar — lista lo que te deben\n"
+        "/cobrado ID — marca algo como ya cobrado\n"
         "/planilla — te mando el link a la planilla de Google Sheets\n\n"
         "¿Te equivocaste en un gasto?\n"
         "/gastos — ver los últimos gastos con su número de fila\n"
@@ -159,6 +170,42 @@ def cmd_pagado(texto_args):
     if db.marcar_pagado(id_pendiente):
         return f"Marcado como pagado #{id_pendiente}."
     return f"No encontré el pendiente #{id_pendiente}."
+
+
+def cmd_cobrar(texto_args):
+    partes = [p.strip() for p in texto_args.split(" - ")]
+    if len(partes) not in (2, 3):
+        return ("Formato: /cobrar Descripcion - Monto - Quien (Quien es opcional)\n"
+                "Ejemplo: /cobrar Cervezas - 5880 - Martu")
+    descripcion, monto_str = partes[0], partes[1]
+    quien = partes[2] if len(partes) == 3 else ""
+    monto = parsear_monto(monto_str)
+    if monto is None:
+        return "No pude leer el monto."
+    nuevo_id = db.agregar_por_cobrar(descripcion, monto, quien)
+    quien_txt = f" a {quien}" if quien else ""
+    return f"Anotado (#{nuevo_id}): te tienen que dar ${monto:,.2f} por {descripcion}{quien_txt}."
+
+
+def cmd_porcobrar():
+    items = db.listar_por_cobrar(solo_no_cobrados=True)
+    if not items:
+        return "No tenés nada pendiente de cobrar 🎉"
+    lineas = ["<b>Por cobrar:</b>"]
+    for it in items:
+        quien_txt = f" ({it['quien']})" if it["quien"] else ""
+        lineas.append(f"#{it['id']} {it['descripcion']}{quien_txt} — ${it['monto']:,.2f}")
+    return "\n".join(lineas)
+
+
+def cmd_cobrado(texto_args):
+    try:
+        id_cobrar = int(texto_args.strip())
+    except ValueError:
+        return "Usá: /cobrado ID (el número que aparece en /porcobrar)"
+    if db.marcar_cobrado(id_cobrar):
+        return f"Marcado como cobrado #{id_cobrar}."
+    return f"No encontré el #{id_cobrar} en por cobrar."
 
 
 def cmd_gastos(texto_args):
@@ -322,7 +369,15 @@ def webhook():
     if chat_id != CHAT_ID:
         return jsonify(ok=True)
 
+    es_respuesta_categoria = False
+    if not texto.startswith("/") and chat_id in _PENDIENTE_CATEGORIA:
+        if time.time() - _PENDIENTE_CATEGORIA[chat_id]["ts"] <= _PENDIENTE_TTL_SEG:
+            es_respuesta_categoria = True
+        else:
+            _PENDIENTE_CATEGORIA.pop(chat_id, None)  # la pregunta quedo vieja, se descarta
+
     if texto.startswith("/"):
+        _PENDIENTE_CATEGORIA.pop(chat_id, None)  # un comando cancela la pregunta pendiente
         partes = texto.split(" ", 1)
         comando = partes[0].lower()
         args = partes[1] if len(partes) > 1 else ""
@@ -345,6 +400,12 @@ def webhook():
             respuesta = cmd_pendientes()
         elif comando == "/pagado":
             respuesta = cmd_pagado(args)
+        elif comando == "/cobrar":
+            respuesta = cmd_cobrar(args)
+        elif comando == "/porcobrar":
+            respuesta = cmd_porcobrar()
+        elif comando == "/cobrado":
+            respuesta = cmd_cobrado(args)
         elif comando == "/gastos":
             respuesta = cmd_gastos(args)
         elif comando == "/corregir":
@@ -355,6 +416,13 @@ def webhook():
             respuesta = f"Acá está: {db.url_planilla()}"
         else:
             respuesta = "No conozco ese comando. Probá /help"
+    elif es_respuesta_categoria:
+        pendiente = _PENDIENTE_CATEGORIA.pop(chat_id)
+        categoria = normalizar_categoria(texto.strip())
+        db.agregar_gasto(pendiente["monto"], categoria, pendiente["descripcion"],
+                          pendiente["cuenta"], fecha=pendiente["fecha"])
+        aviso_fecha = f" (fecha {pendiente['fecha'].strftime('%d/%m/%Y')})" if pendiente["fecha"] else ""
+        respuesta = f"Anotado: ${pendiente['monto']:,.2f} en {categoria} ({pendiente['cuenta']}){aviso_fecha}."
     elif es_ahorro(texto):
         monto = parsear_monto(texto)
         if monto is None:
@@ -371,6 +439,14 @@ def webhook():
             monto, origen, destino = resultado
             db.transferir(monto, origen, destino)
             respuesta = f"Transferido ${monto:,.2f} de {origen} a {destino}."
+    elif es_mencion_pendiente(texto):
+        monto_sugerido = parsear_monto(texto)
+        monto_txt = f"{monto_sugerido:g}" if monto_sugerido is not None else "Monto"
+        respuesta = (
+            "Para que quede bien anotado (no lo cargué como gasto), decime cuál es:\n"
+            f"• Algo que VOS tenés que pagar: /pendiente Descripcion - {monto_txt} - DD/MM/AAAA\n"
+            f"• Plata que te tienen que dar a vos: /cobrar Descripcion - {monto_txt} - Quien"
+        )
     elif es_ingreso(texto):
         resultado = parsear_ingreso(texto)
         if resultado is None:
@@ -387,9 +463,17 @@ def webhook():
                          "Escribí algo como: <i>gaste 500 en comida</i>")
         else:
             monto, categoria, descripcion, cuenta, fecha = resultado
-            db.agregar_gasto(monto, categoria, descripcion, cuenta, fecha=fecha)
-            aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
-            respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta}){aviso_fecha}."
+            if categoria == "Sin categoria":
+                _PENDIENTE_CATEGORIA[chat_id] = {
+                    "monto": monto, "descripcion": descripcion, "cuenta": cuenta,
+                    "fecha": fecha, "ts": time.time(),
+                }
+                respuesta = (f"¿En qué categoría anoto este gasto de ${monto:,.2f} ({cuenta})?\n"
+                             "Respondé solo con la categoría (ej: <i>comida</i>).")
+            else:
+                db.agregar_gasto(monto, categoria, descripcion, cuenta, fecha=fecha)
+                aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
+                respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta}){aviso_fecha}."
 
     enviar_mensaje(respuesta, chat_id)
     return jsonify(ok=True)
