@@ -15,6 +15,11 @@ CRON_SECRET = os.environ.get("CRON_SECRET", "cambiame")
 
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# Guarda los update_id ya procesados, para no duplicar un gasto si Telegram
+# reintenta mandar el mismo mensaje (pasa cuando el servidor tarda en responder).
+_UPDATES_PROCESADOS = set()
+_UPDATES_MAX = 500
+
 
 def enviar_mensaje(texto, chat_id=None):
     requests.post(f"{API_URL}/sendMessage", json={
@@ -179,6 +184,17 @@ def health():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     update = request.get_json(force=True, silent=True) or {}
+
+    update_id = update.get("update_id")
+    if update_id is not None:
+        if update_id in _UPDATES_PROCESADOS:
+            return jsonify(ok=True)  # ya lo procesamos, Telegram esta reintentando
+        _UPDATES_PROCESADOS.add(update_id)
+        if len(_UPDATES_PROCESADOS) > _UPDATES_MAX:
+            _UPDATES_PROCESADOS.difference_update(
+                sorted(_UPDATES_PROCESADOS)[:_UPDATES_MAX // 2]
+            )
+
     message = update.get("message") or update.get("edited_message")
     if not message:
         return jsonify(ok=True)

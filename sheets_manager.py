@@ -205,7 +205,7 @@ def agregar_gasto(monto: float, categoria: str, descripcion: str, cuenta: str):
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
     fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
-    ws.append_row([fecha, monto, categoria, descripcion, cuenta], value_input_option="USER_ENTERED")
+    ws.append_row([fecha, monto, categoria, descripcion, cuenta], value_input_option="USER_ENTERED", table_range="A1")
     _recalcular_resumen(ws)
     modificar_saldo(cuenta, -monto)
 
@@ -340,7 +340,7 @@ def agregar_pendiente(descripcion: str, monto: float, fecha_vencimiento: date):
     ids = [int(f[0]) for f in filas if f and str(f[0]).isdigit()]
     nuevo_id = (max(ids) + 1) if ids else 1
     ws.append_row([nuevo_id, descripcion, monto, fecha_vencimiento.strftime("%d/%m/%Y"), "No"],
-                  value_input_option="USER_ENTERED")
+                  value_input_option="USER_ENTERED", table_range="A1")
     return nuevo_id
 
 
@@ -415,7 +415,7 @@ def modificar_saldo(cuenta: str, delta: float):
     ws = _hoja_cuentas(sh)
     fila = _fila_cuenta(ws, cuenta)
     if fila is None:
-        ws.append_row([cuenta, delta], value_input_option="USER_ENTERED")
+        ws.append_row([cuenta, delta], value_input_option="USER_ENTERED", table_range="A1")
         return
     actual = ws.acell(f"B{fila}", value_render_option="UNFORMATTED_VALUE").value or 0
     nuevo = _a_float(actual) + delta
@@ -454,7 +454,7 @@ def _hoja_rendimientos(sh):
 def registrar_rendimiento(monto: float):
     sh = _spreadsheet()
     ws = _hoja_rendimientos(sh)
-    ws.append_row([_nombre_mes_actual(), monto], value_input_option="USER_ENTERED")
+    ws.append_row([_nombre_mes_actual(), monto], value_input_option="USER_ENTERED", table_range="A1")
 
 
 def rendimiento_mes_actual():
