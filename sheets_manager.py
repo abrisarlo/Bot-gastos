@@ -5,6 +5,7 @@ Maneja la planilla de Google Sheets:
 - Hoja fija "Cuentas" con el saldo de efectivo/bancos/billeteras e invertido.
 - Hoja fija "Rendimientos" con lo que rindio lo invertido, mes a mes.
 """
+import re
 import os
 import json
 from datetime import datetime, date
@@ -46,6 +47,24 @@ def _spreadsheet():
 
 def _nombre_mes_actual():
     return date.today().strftime("%Y-%m")
+
+
+def _a_float(valor):
+    """Convierte a float de forma tolerante: saca '$', espacios, etc.
+    Sirve como red de seguridad por si alguna celda vuelve formateada
+    (ej. '$1,234.56') en vez de como numero puro."""
+    if valor is None or valor == "":
+        return 0.0
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = re.sub(r"[^0-9,.\-]", "", str(valor))
+    texto = texto.replace(",", ".")
+    if texto in ("", "-", "."):
+        return 0.0
+    try:
+        return float(texto)
+    except ValueError:
+        return 0.0
 
 
 # ---------- Hojas mensuales ----------
@@ -123,26 +142,26 @@ def _agregar_grafico_torta(sh, ws):
 
 def _leer_gastos(ws):
     """Devuelve lista de (monto, categoria) de todas las filas cargadas."""
-    valores = ws.get("B2:C1000")
+    valores = ws.get("B2:C1000", value_render_option="UNFORMATTED_VALUE")
     resultado = []
     for fila in valores:
         if len(fila) < 2 or fila[0] == "":
             continue
         try:
-            resultado.append((float(str(fila[0]).replace(",", ".")), fila[1]))
+            resultado.append((_a_float(fila[0]), fila[1]))
         except ValueError:
             continue
     return resultado
 
 
 def _sumar_columna(ws, rango):
-    valores = ws.get(rango)
+    valores = ws.get(rango, value_render_option="UNFORMATTED_VALUE")
     total = 0.0
     for fila in valores:
         if not fila or fila[0] == "":
             continue
         try:
-            total += float(str(fila[0]).replace(",", "."))
+            total += _a_float(fila[0])
         except ValueError:
             continue
     return total
@@ -266,7 +285,7 @@ def agregar_pendiente(descripcion: str, monto: float, fecha_vencimiento: date):
 def listar_pendientes(solo_no_pagados=True):
     sh = _spreadsheet()
     ws = _hoja_pendientes(sh)
-    filas = ws.get("A2:E1000")
+    filas = ws.get("A2:E1000", value_render_option="UNFORMATTED_VALUE")
     resultado = []
     for f in filas:
         if not f or f[0] == "":
@@ -276,7 +295,7 @@ def listar_pendientes(solo_no_pagados=True):
         if solo_no_pagados and pagado == "Si":
             continue
         resultado.append({
-            "id": int(id_), "descripcion": desc, "monto": float(str(monto).replace(",", ".") or 0),
+            "id": int(id_), "descripcion": desc, "monto": _a_float(monto),
             "fecha_vencimiento": fecha_venc, "pagado": pagado,
         })
     return resultado
@@ -336,20 +355,20 @@ def modificar_saldo(cuenta: str, delta: float):
     if fila is None:
         ws.append_row([cuenta, delta], value_input_option="USER_ENTERED")
         return
-    actual = ws.acell(f"B{fila}").value or 0
-    nuevo = float(str(actual).replace(",", ".")) + delta
+    actual = ws.acell(f"B{fila}", value_render_option="UNFORMATTED_VALUE").value or 0
+    nuevo = _a_float(actual) + delta
     ws.update(values=[[nuevo]], range_name=f"B{fila}")
 
 
 def obtener_saldos():
     sh = _spreadsheet()
     ws = _hoja_cuentas(sh)
-    filas = ws.get("A2:B100")
+    filas = ws.get("A2:B100", value_render_option="UNFORMATTED_VALUE")
     resultado = []
     for f in filas:
         if not f or f[0] == "":
             continue
-        saldo = float(str(f[1]).replace(",", ".")) if len(f) > 1 and f[1] != "" else 0.0
+        saldo = _a_float(f[1]) if len(f) > 1 else 0.0
         resultado.append((f[0], saldo))
     return resultado
 
@@ -379,13 +398,13 @@ def registrar_rendimiento(monto: float):
 def rendimiento_mes_actual():
     sh = _spreadsheet()
     ws = _hoja_rendimientos(sh)
-    filas = ws.get("A2:B200")
+    filas = ws.get("A2:B200", value_render_option="UNFORMATTED_VALUE")
     total = 0.0
     mes = _nombre_mes_actual()
     for f in filas:
         if f and f[0] == mes and len(f) > 1:
             try:
-                total += float(str(f[1]).replace(",", "."))
+                total += _a_float(f[1])
             except ValueError:
                 pass
     return total
