@@ -142,8 +142,13 @@ def parsear_gasto(texto: str):
     categoria = "Sin categoria"
     m_en = EN_CATEGORIA_RE.search(texto_para_monto_categoria)
     m_de = DE_CATEGORIA_RE.search(texto_para_monto_categoria)
-    if m_en:
-        categoria = m_en.group(1).capitalize()
+    candidato_en = m_en.group(1) if m_en else None
+    if candidato_en and _buscar_cuenta(candidato_en):
+        # "en <palabra>" probablemente se referia a una cuenta conocida
+        # (ej. "en wallbit"), no es una categoria real -> la descartamos
+        candidato_en = None
+    if candidato_en:
+        categoria = candidato_en.capitalize()
     elif m_de:
         categoria = m_de.group(1).capitalize()
 

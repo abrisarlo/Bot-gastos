@@ -188,7 +188,22 @@ def _resolver_selector(primer_token, resto):
 
 def cmd_corregir(texto_args):
     primer_token, _, resto = texto_args.strip().partition(" ")
-    selector_tipo, selector_valor, campo_valor = _resolver_selector(primer_token, resto)
+
+    # "categoria:X" (con o sin espacio despues de los dos puntos) es ambiguo:
+    # casi siempre el usuario quiere "cambiale la categoria a X" (afecta al
+    # ultimo gasto), no "busca el gasto que ya tiene esa categoria". Solo lo
+    # tratamos como selector cuando ademas viene claramente pegado un campo
+    # despues (ej: "categoria:comida cuenta galicia").
+    if primer_token.lower().startswith("categoria:"):
+        valor_pegado = primer_token.split(":", 1)[1].strip()
+        if valor_pegado and resto.strip():
+            selector_tipo, selector_valor, campo_valor = "categoria", valor_pegado, resto
+        else:
+            valor_directo = (valor_pegado + " " + resto).strip()
+            selector_tipo, selector_valor = "ultimo", None
+            campo_valor = f"categoria {valor_directo}"
+    else:
+        selector_tipo, selector_valor, campo_valor = _resolver_selector(primer_token, resto)
 
     campo, _, valor = campo_valor.strip().partition(" ")
     campo = campo.lower()
