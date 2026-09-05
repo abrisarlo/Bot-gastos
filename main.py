@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify
 
 import sheets_manager as db
 from parser import (parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso,
-                     buscar_cuenta, buscar_todas_cuentas)
+                     buscar_cuenta, buscar_todas_cuentas, es_transferencia, parsear_transferencia)
 
 app = Flask(__name__)
 
@@ -38,6 +38,7 @@ def cmd_help():
         "<i>gaste 500 en comida</i> (cuenta Efectivo por default)\n"
         "<i>gaste 500 en comida con galicia</i>\n"
         "<i>cobre 300000 en mercado pago</i>\n"
+        "<i>transferi 5000 de efectivo a galicia</i>\n"
         "<i>ahorre 5000</i>\n\n"
         "Cuentas que reconozco: efectivo, galicia, mercado pago, wallbit, cuenta dni\n\n"
         "Comandos:\n"
@@ -101,6 +102,27 @@ def cmd_rendimiento(texto_args):
         return "Usá: /rendimiento 8000"
     db.registrar_rendimiento(monto)
     return f"Anotado: este mes lo invertido rindió ${monto:,.2f}."
+
+
+def cmd_transferir(texto_args):
+    """Formato de respaldo: /transferir monto origen destino (ej: /transferir 5000 efectivo galicia)"""
+    partes = texto_args.split()
+    if len(partes) < 3:
+        return ("Usá: /transferir monto origen destino\n"
+                "Ejemplo: /transferir 5000 efectivo galicia")
+    monto = parsear_monto(partes[0])
+    if monto is None:
+        return "No encontré un monto ahí."
+    origen = buscar_cuenta(partes[1])
+    destino = buscar_cuenta(" ".join(partes[2:]))
+    if not origen:
+        return f"No reconozco la cuenta de origen: {partes[1]}"
+    if not destino:
+        return f"No reconozco la cuenta de destino: {' '.join(partes[2:])}"
+    if origen == destino:
+        return "El origen y el destino son la misma cuenta."
+    db.transferir(monto, origen, destino)
+    return f"Transferido ${monto:,.2f} de {origen} a {destino}."
 
 
 def cmd_pendiente(texto_args):
@@ -292,6 +314,8 @@ def webhook():
             respuesta = cmd_invertir(args)
         elif comando == "/rendimiento":
             respuesta = cmd_rendimiento(args)
+        elif comando == "/transferir":
+            respuesta = cmd_transferir(args)
         elif comando == "/pendiente":
             respuesta = cmd_pendiente(args)
         elif comando == "/pendientes":
@@ -315,6 +339,15 @@ def webhook():
         else:
             db.agregar_ahorro_manual(monto)
             respuesta = f"Anotado como ahorro: ${monto:,.2f} 🐷"
+    elif es_transferencia(texto):
+        resultado = parsear_transferencia(texto)
+        if resultado is None:
+            respuesta = ("No pude entender la transferencia. Ej: <i>transferi 5000 de efectivo a galicia</i>\n"
+                         "O usá: /transferir 5000 efectivo galicia")
+        else:
+            monto, origen, destino = resultado
+            db.transferir(monto, origen, destino)
+            respuesta = f"Transferido ${monto:,.2f} de {origen} a {destino}."
     elif es_ingreso(texto):
         resultado = parsear_ingreso(texto)
         if resultado is None:

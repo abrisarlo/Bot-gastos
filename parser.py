@@ -15,6 +15,8 @@ EN_CATEGORIA_RE = re.compile(r"\ben\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
 DE_CATEGORIA_RE = re.compile(r"\bde\b\s+([A-Za-zÀ-ÿÑñ]+)", re.IGNORECASE)
 AHORRO_RE = re.compile(r"\bahorr", re.IGNORECASE)
 INGRESO_RE = re.compile(r"\b(cobr|ingres|deposit|recib)", re.IGNORECASE)
+TRANSFERENCIA_RE = re.compile(r"\btransfer|\btraspas", re.IGNORECASE)
+DE_A_RE = re.compile(r"\bde\s+(.+?)\s+\ba\b\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_RE = re.compile(r"\bcon\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_EN_RE = re.compile(r"\b(?:con|en)\s+(.+)$", re.IGNORECASE)
 
@@ -40,6 +42,10 @@ def es_ahorro(texto: str) -> bool:
 
 def es_ingreso(texto: str) -> bool:
     return bool(INGRESO_RE.search(texto))
+
+
+def es_transferencia(texto: str) -> bool:
+    return bool(TRANSFERENCIA_RE.search(texto))
 
 
 def _normalizar_numero(bruto: str) -> str:
@@ -142,6 +148,25 @@ def parsear_gasto(texto: str):
         categoria = m_de.group(1).capitalize()
 
     return monto, categoria, texto.strip(), cuenta
+
+
+def parsear_transferencia(texto: str):
+    """
+    Devuelve (monto, cuenta_origen, cuenta_destino) o None si no encuentra
+    un monto o no puede identificar las dos cuentas.
+    Ejemplo: "transferi 5000 de efectivo a galicia"
+    """
+    monto = parsear_monto(texto)
+    if monto is None:
+        return None
+    m = DE_A_RE.search(texto)
+    if not m:
+        return None
+    origen = _buscar_cuenta(m.group(1))
+    destino = _buscar_cuenta(m.group(2))
+    if not origen or not destino or origen == destino:
+        return None
+    return monto, origen, destino
 
 
 def parsear_ingreso(texto: str):

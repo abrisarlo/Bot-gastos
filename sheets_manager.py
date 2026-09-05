@@ -351,7 +351,7 @@ def rollover_si_corresponde():
     sh = _spreadsheet()
     nombre_actual = _nombre_mes_actual()
     titulos = [ws.title for ws in sh.worksheets()
-               if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS)]
+               if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS, TRANSFERENCIAS)]
 
     if nombre_actual in titulos:
         return None
@@ -487,6 +487,32 @@ def obtener_saldos():
 
 def invertir(monto: float):
     modificar_saldo("Invertido", monto)
+
+
+# ---------- Transferencias entre cuentas propias ----------
+
+TRANSFERENCIAS = "Transferencias"
+
+
+def _hoja_transferencias(sh):
+    for ws in sh.worksheets():
+        if ws.title == TRANSFERENCIAS:
+            return ws
+    ws = sh.add_worksheet(title=TRANSFERENCIAS, rows=500, cols=4)
+    ws.update(values=[["Fecha", "Monto", "Origen", "Destino"]], range_name="A1:D1")
+    ws.format("A1:D1", {"textFormat": {"bold": True}})
+    return ws
+
+
+def transferir(monto: float, origen: str, destino: str):
+    """Mueve plata entre dos cuentas propias: no cuenta como gasto ni como
+    ingreso, solo ajusta los saldos y queda anotado en la hoja Transferencias."""
+    sh = _spreadsheet()
+    ws = _hoja_transferencias(sh)
+    fecha = datetime.now().strftime("%d/%m/%Y %H:%M")
+    ws.append_row([fecha, monto, origen, destino], value_input_option="USER_ENTERED", table_range="A1")
+    modificar_saldo(origen, -monto)
+    modificar_saldo(destino, monto)
 
 
 # ---------- Rendimientos de lo invertido ----------
