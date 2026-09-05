@@ -5,7 +5,8 @@ from datetime import datetime
 from flask import Flask, request, jsonify
 
 import sheets_manager as db
-from parser import parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso, buscar_cuenta
+from parser import (parsear_gasto, parsear_ingreso, parsear_monto, es_ahorro, es_ingreso,
+                     buscar_cuenta, buscar_todas_cuentas)
 
 app = Flask(__name__)
 
@@ -48,11 +49,13 @@ def cmd_help():
         "/pendientes — lista lo que falta pagar\n"
         "/pagado ID — marca un pendiente como pagado\n"
         "/planilla — te mando el link a la planilla de Google Sheets\n\n"
-        "¿Te equivocaste en el último gasto?\n"
-        "/corregir cuenta galicia — le cambia la cuenta\n"
-        "/corregir monto 1500 — le cambia el monto\n"
-        "/corregir categoria super — le cambia la categoría\n"
-        "/deshacer — lo borra directamente\n"
+        "¿Te equivocaste en un gasto?\n"
+        "/gastos — ver los últimos gastos con su número de fila\n"
+        "/corregir cuenta galicia — corrige el último gasto\n"
+        "/corregir 8 cuenta galicia — corrige la fila 8\n"
+        "/corregir categoria:comida cuenta galicia — corrige el más reciente con esa categoría\n"
+        "(cuenta, monto o categoria funcionan igual en los tres formatos)\n"
+        "/deshacer — borra el último gasto (también acepta fila o categoria: igual que /corregir)\n"
     )
 
 
@@ -135,43 +138,112 @@ def cmd_pagado(texto_args):
     return f"No encontré el pendiente #{id_pendiente}."
 
 
+def cmd_gastos(texto_args):
+    try:
+        n = int(texto_args.strip()) if texto_args.strip() else 10
+    except ValueError:
+        n = 10
+    gastos = db.listar_gastos_mes(n)
+    if not gastos:
+        return "No hay ningún gasto cargado este mes."
+    lineas = [f"<b>Últimos {len(gastos)} gastos</b> (fila — fecha — monto en categoría, cuenta):"]
+    for g in gastos:
+        lineas.append(f"#{g['fila']} — {g['fecha']} — ${g['monto']:,.2f} en {g['categoria']} ({g['cuenta']})")
+    lineas.append("\nPara corregir uno: /corregir FILA cuenta galicia")
+    lineas.append("Para corregir por categoría: /corregir categoria:comida cuenta galicia")
+    return "\n".join(lineas)
+
+
+def _resolver_selector(primer_token, resto):
+    """Interpreta el primer token de /corregir o /deshacer: un numero de fila,
+    'categoria:X', o nada (afecta al ultimo gasto). Devuelve (tipo, valor, resto_sin_selector)."""
+    if primer_token.isdigit():
+        return "id", int(primer_token), resto
+    if primer_token.lower().startswith("categoria:"):
+        return "categoria", primer_token.split(":", 1)[1], resto
+    return "ultimo", None, (primer_token + " " + resto).strip()
+
+
 def cmd_corregir(texto_args):
-    campo, _, valor = texto_args.strip().partition(" ")
+    primer_token, _, resto = texto_args.strip().partition(" ")
+    selector_tipo, selector_valor, campo_valor = _resolver_selector(primer_token, resto)
+
+    campo, _, valor = campo_valor.strip().partition(" ")
     campo = campo.lower()
     valor = valor.strip()
-    if not campo or not valor:
-        return ("Usá: /corregir cuenta galicia | /corregir monto 1500 | /corregir categoria super")
 
-    kwargs = {}
-    if campo == "cuenta":
-        cuenta = buscar_cuenta(valor)
-        if not cuenta:
-            return f"No reconozco esa cuenta: {valor}"
-        kwargs["nueva_cuenta"] = cuenta
-    elif campo == "monto":
-        monto = parsear_monto(valor)
-        if monto is None:
-            return "No encontré un monto ahí."
-        kwargs["nuevo_monto"] = monto
-    elif campo == "categoria":
-        kwargs["nueva_categoria"] = valor.capitalize()
-    else:
-        return "Los campos válidos son: cuenta, monto, categoria."
+    if campo in ("cuenta", "monto", "categoria") and valor:
+        kwargs = {}
+        if campo == "cuenta":
+            cuenta = buscar_cuenta(valor)
+            if not cuenta:
+                return f"No reconozco esa cuenta: {valor}"
+            kwargs["nueva_cuenta"] = cuenta
+        elif campo == "monto":
+            monto = parsear_monto(valor)
+            if monto is None:
+                return "No encontré un monto ahí."
+            kwargs["nuevo_monto"] = monto
+        elif campo == "categoria":
+            kwargs["nueva_categoria"] = valor.capitalize()
 
-    resultado = db.corregir_ultimo_gasto(**kwargs)
-    if resultado is None:
-        return "No encontré ningún gasto cargado este mes para corregir."
-    vieja, nueva = resultado
-    return (f"Corregido el último gasto:\n"
-            f"${vieja['monto']:,.2f} en {vieja['categoria']} ({vieja['cuenta']})\n"
-            f"→ ${nueva['monto']:,.2f} en {nueva['categoria']} ({nueva['cuenta']})")
+        resultado, total = db.corregir_gasto(selector_tipo, selector_valor, **kwargs)
+        if resultado is None:
+            if selector_tipo == "categoria":
+                return f"No encontré ningún gasto con categoría '{selector_valor}' este mes."
+            if selector_tipo == "id":
+                return f"No encontré ningún gasto en la fila {selector_valor}."
+            return "No encontré ningún gasto cargado este mes para corregir."
+
+        vieja, nueva = resultado
+        aviso = ""
+        if selector_tipo == "categoria" and total > 1:
+            aviso = f"\n(Había {total} con esa categoría, corregí el más reciente — fila {vieja['fila']})"
+        return (f"Corregido (fila {vieja['fila']}):\n"
+                f"${vieja['monto']:,.2f} en {vieja['categoria']} ({vieja['cuenta']})\n"
+                f"→ ${nueva['monto']:,.2f} en {nueva['categoria']} ({nueva['cuenta']}){aviso}")
+
+    # No vino en el formato exacto: no adivinamos ni aplicamos nada solo,
+    # pero intentamos sugerir el comando correcto para que lo copie y mande.
+    sugerencias = []
+    cuentas_mencionadas = buscar_todas_cuentas(campo_valor)
+    prefijo = "" if selector_tipo == "ultimo" else f"{primer_token} "
+    if len(cuentas_mencionadas) == 1:
+        sugerencias.append(f"/corregir {prefijo}cuenta {cuentas_mencionadas[0]}")
+    elif len(cuentas_mencionadas) > 1:
+        sugerencias.append(
+            f"Mencionaste más de una cuenta ({', '.join(cuentas_mencionadas)}) — "
+            f"decime cuál es la correcta, ej: /corregir {prefijo}cuenta {cuentas_mencionadas[0]}"
+        )
+    monto_mencionado = parsear_monto(campo_valor)
+    if monto_mencionado is not None and "monto" in campo_valor.lower():
+        sugerencias.append(f"/corregir {prefijo}monto {monto_mencionado:g}")
+
+    mensaje = ("Para corregir necesito el formato exacto, así solo:\n"
+               "/corregir cuenta galicia (afecta al último gasto)\n"
+               "/corregir FILA cuenta galicia (ej: /corregir 8 cuenta galicia)\n"
+               "/corregir categoria:comida cuenta galicia\n"
+               "También funciona con monto y categoria en vez de cuenta.\n"
+               "Mandá /gastos para ver los números de fila.")
+    if sugerencias:
+        mensaje += "\n\n¿Quisiste decir esto?\n" + "\n".join(sugerencias)
+    return mensaje
 
 
-def cmd_deshacer():
-    info = db.deshacer_ultimo_gasto()
+def cmd_deshacer(texto_args):
+    texto_args = texto_args.strip()
+    selector_tipo, selector_valor, _ = _resolver_selector(texto_args, "") if texto_args else ("ultimo", None, "")
+    info, total = db.deshacer_gasto(selector_tipo, selector_valor)
     if info is None:
+        if selector_tipo == "categoria":
+            return f"No encontré ningún gasto con categoría '{selector_valor}' este mes."
+        if selector_tipo == "id":
+            return f"No encontré ningún gasto en la fila {selector_valor}."
         return "No encontré ningún gasto cargado este mes para deshacer."
-    return f"Borrado: ${info['monto']:,.2f} en {info['categoria']} ({info['cuenta']})."
+    aviso = ""
+    if selector_tipo == "categoria" and total > 1:
+        aviso = f" (había {total}, borré el más reciente — fila {info['fila']})"
+    return f"Borrado (fila {info['fila']}): ${info['monto']:,.2f} en {info['categoria']} ({info['cuenta']}).{aviso}"
 
 
 # ---------- Rutas ----------
@@ -226,10 +298,12 @@ def webhook():
             respuesta = cmd_pendientes()
         elif comando == "/pagado":
             respuesta = cmd_pagado(args)
+        elif comando == "/gastos":
+            respuesta = cmd_gastos(args)
         elif comando == "/corregir":
             respuesta = cmd_corregir(args)
         elif comando == "/deshacer":
-            respuesta = cmd_deshacer()
+            respuesta = cmd_deshacer(args)
         elif comando == "/planilla":
             respuesta = f"Acá está: {db.url_planilla()}"
         else:

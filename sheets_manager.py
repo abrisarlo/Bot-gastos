@@ -210,36 +210,86 @@ def agregar_gasto(monto: float, categoria: str, descripcion: str, cuenta: str):
     modificar_saldo(cuenta, -monto)
 
 
-def _ultima_fila_gasto(ws):
-    """Datos de la ultima fila cargada en la tabla de gastos (A:E), o None si esta vacia."""
+def _todos_los_gastos(ws):
+    """Todas las filas de la tabla de gastos (A:E), con su numero de fila real."""
     filas = ws.get("A2:E1000", value_render_option="UNFORMATTED_VALUE")
-    if not filas:
+    resultado = []
+    for i, fila in enumerate(filas, start=2):  # la fila 1 es el header
+        if not fila or fila[0] == "":
+            continue
+        fila = fila + [""] * (5 - len(fila))
+        fecha, monto, categoria, descripcion, cuenta = fila
+        resultado.append({
+            "fila": i, "fecha": fecha, "monto": _a_float(monto),
+            "categoria": categoria, "descripcion": descripcion,
+            "cuenta": cuenta or "Efectivo",
+        })
+    return resultado
+
+
+def listar_gastos_mes(n=10):
+    """Los ultimos n gastos del mes actual, en orden cronologico, con su numero de fila."""
+    sh = _spreadsheet()
+    ws = obtener_o_crear_hoja_mes(sh)
+    return _todos_los_gastos(ws)[-n:]
+
+
+def _gasto_por_fila(ws, fila):
+    valores = ws.get(f"A{fila}:E{fila}", value_render_option="UNFORMATTED_VALUE")
+    if not valores or not valores[0] or valores[0][0] == "":
         return None
-    numero_fila = len(filas) + 1  # +1 porque la fila 1 es el header
-    fila = filas[-1] + [""] * (5 - len(filas[-1]))
-    fecha, monto, categoria, descripcion, cuenta = fila
+    datos = valores[0] + [""] * (5 - len(valores[0]))
+    fecha, monto, categoria, descripcion, cuenta = datos
     return {
-        "fila": numero_fila, "fecha": fecha, "monto": _a_float(monto),
+        "fila": fila, "fecha": fecha, "monto": _a_float(monto),
         "categoria": categoria, "descripcion": descripcion,
         "cuenta": cuenta or "Efectivo",
     }
 
 
+def _gasto_por_categoria(ws, categoria_buscada):
+    """El gasto MAS RECIENTE que matchea esa categoria (sin importar mayus/minus).
+    Devuelve (info_o_none, cuantos_matchearon_en_total)."""
+    categoria_low = categoria_buscada.strip().lower()
+    coincidencias = [g for g in _todos_los_gastos(ws) if g["categoria"].strip().lower() == categoria_low]
+    if not coincidencias:
+        return None, 0
+    return coincidencias[-1], len(coincidencias)
+
+
+def _resolver_gasto(ws, selector_tipo, selector_valor):
+    """selector_tipo: 'ultimo' | 'id' | 'categoria'. Devuelve (info_o_none, total_matches)."""
+    if selector_tipo == "id":
+        info = _gasto_por_fila(ws, selector_valor)
+        return info, (1 if info else 0)
+    if selector_tipo == "categoria":
+        return _gasto_por_categoria(ws, selector_valor)
+    # 'ultimo'
+    todos = _todos_los_gastos(ws)
+    info = todos[-1] if todos else None
+    return info, (1 if info else 0)
+
+
 def ultimo_gasto_mes_actual():
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
-    return _ultima_fila_gasto(ws)
+    info, _ = _resolver_gasto(ws, "ultimo", None)
+    return info
 
 
-def corregir_ultimo_gasto(nuevo_monto=None, nueva_categoria=None, nueva_cuenta=None):
-    """Corrige el ultimo gasto cargado (monto, categoria y/o cuenta) y ajusta
-    los saldos de las cuentas para que reflejen el cambio. Devuelve
-    (info_vieja, info_nueva) o None si no habia ningun gasto cargado."""
+def corregir_gasto(selector_tipo="ultimo", selector_valor=None,
+                    nuevo_monto=None, nueva_categoria=None, nueva_cuenta=None):
+    """Corrige un gasto (monto, categoria y/o cuenta) elegido por:
+    - 'ultimo': el ultimo cargado
+    - 'id': el de esa fila exacta (selector_valor = numero de fila)
+    - 'categoria': el mas reciente con esa categoria (selector_valor = texto)
+    Devuelve ((info_vieja, info_nueva), total_matches). info_vieja es None si no se
+    encontro nada para corregir."""
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
-    info = _ultima_fila_gasto(ws)
+    info, total = _resolver_gasto(ws, selector_tipo, selector_valor)
     if info is None:
-        return None
+        return None, total
 
     fila = info["fila"]
     monto_final = nuevo_monto if nuevo_monto is not None else info["monto"]
@@ -254,22 +304,22 @@ def corregir_ultimo_gasto(nuevo_monto=None, nueva_categoria=None, nueva_cuenta=N
     _recalcular_resumen(ws)
 
     nueva_info = dict(info, monto=monto_final, categoria=categoria_final, cuenta=cuenta_final)
-    return info, nueva_info
+    return (info, nueva_info), total
 
 
-def deshacer_ultimo_gasto():
-    """Borra el ultimo gasto cargado y revierte el debito de su cuenta.
-    Devuelve la info del gasto borrado, o None si no habia nada."""
+def deshacer_gasto(selector_tipo="ultimo", selector_valor=None):
+    """Borra un gasto elegido por el mismo criterio que corregir_gasto, y revierte
+    el debito de su cuenta. Devuelve (info_o_none, total_matches)."""
     sh = _spreadsheet()
     ws = obtener_o_crear_hoja_mes(sh)
-    info = _ultima_fila_gasto(ws)
+    info, total = _resolver_gasto(ws, selector_tipo, selector_valor)
     if info is None:
-        return None
+        return None, total
     fila = info["fila"]
     modificar_saldo(info["cuenta"], info["monto"])
     ws.batch_clear([f"A{fila}:E{fila}"])
     _recalcular_resumen(ws)
-    return info
+    return info, total
 
 
 def agregar_ahorro_manual(monto: float):
