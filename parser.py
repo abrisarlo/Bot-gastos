@@ -22,6 +22,7 @@ PENDIENTE_RE = re.compile(r"\bpendient", re.IGNORECASE)
 DE_A_RE = re.compile(r"\bde\s+(.+?)\s+\ba\b\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_RE = re.compile(r"\bcon\s+(.+)$", re.IGNORECASE)
 CUENTA_CON_EN_RE = re.compile(r"\b(?:con|en)\s+(.+)$", re.IGNORECASE)
+CUENTA_PALABRA_RE = re.compile(r"\b(?:en|con)\s+cuenta\s+(.+)$", re.IGNORECASE)
 ANTEAYER_RE = re.compile(r"\banteayer\b|\bantes\s+de\s+ayer\b", re.IGNORECASE)
 AYER_RE = re.compile(r"\bayer\b", re.IGNORECASE)
 FECHA_EXPLICITA_RE = re.compile(r"\b(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?\b")
@@ -205,37 +206,57 @@ def normalizar_categoria(palabra: str) -> str:
 def parsear_gasto(texto: str):
     """
     Devuelve (monto, categoria, descripcion, cuenta, fecha) o None si no encuentra un monto.
-    La cuenta se indica con "... con <cuenta>" (para no chocar con "en <categoria>").
+    La cuenta se puede indicar de tres formas (en este orden de prioridad):
+      1. "... con <cuenta>"          (ej: "gaste 500 en comida con galicia")
+      2. "... en/con cuenta <cuenta>" (ej: "pague 15600 en cuenta galicia")
+      3. "... en <cuenta_conocida>"   (ej: "gaste 500 de uber en galicia" -> Galicia)
     La fecha (opcional) se indica con "ayer", "anteayer" o "3/9" / "03/09/2026"; si no se
     menciona ninguna, fecha viene None (se usa el momento actual).
     """
     fecha, texto_sin_fecha = parsear_fecha(texto)
+    texto_trabajo = texto_sin_fecha
+    cuenta = None
 
-    texto_para_monto_categoria = texto_sin_fecha
-    cuenta = CUENTA_DEFAULT
-    m_cuenta = CUENTA_CON_RE.search(texto_sin_fecha)
-    if m_cuenta:
-        encontrada = _buscar_cuenta(m_cuenta.group(1))
+    # 1) "con <cuenta>" explicito
+    m_con = CUENTA_CON_RE.search(texto_trabajo)
+    if m_con:
+        encontrada = _buscar_cuenta(m_con.group(1))
         if encontrada:
             cuenta = encontrada
-            texto_para_monto_categoria = texto_sin_fecha[:m_cuenta.start()].strip()
+            texto_trabajo = texto_trabajo[:m_con.start()].strip()
 
-    monto = parsear_monto(texto_para_monto_categoria)
+    # 2) "en/con cuenta <cuenta>" explicito (la palabra "cuenta" no es categoria)
+    if cuenta is None:
+        m_palabra = CUENTA_PALABRA_RE.search(texto_trabajo)
+        if m_palabra:
+            encontrada = _buscar_cuenta(m_palabra.group(1))
+            if encontrada:
+                cuenta = encontrada
+                texto_trabajo = texto_trabajo[:m_palabra.start()].strip()
+
+    monto = parsear_monto(texto_trabajo)
     if monto is None:
         return None
 
     categoria = "Sin categoria"
-    m_en = EN_CATEGORIA_RE.search(texto_para_monto_categoria)
-    m_de = DE_CATEGORIA_RE.search(texto_para_monto_categoria)
+    m_en = EN_CATEGORIA_RE.search(texto_trabajo)
+    m_de = DE_CATEGORIA_RE.search(texto_trabajo)
     candidato_en = m_en.group(1) if m_en else None
-    if candidato_en and _buscar_cuenta(candidato_en):
-        # "en <palabra>" probablemente se referia a una cuenta conocida
-        # (ej. "en wallbit"), no es una categoria real -> la descartamos
-        candidato_en = None
+    if candidato_en:
+        cuenta_desde_en = _buscar_cuenta(candidato_en)
+        if cuenta_desde_en:
+            # 3) "en <palabra>" resulto ser una cuenta conocida (ej. "en galicia"),
+            # no una categoria real: la usamos como cuenta si todavia no tenemos una
+            if cuenta is None:
+                cuenta = cuenta_desde_en
+            candidato_en = None
     if candidato_en:
         categoria = _normalizar_categoria(candidato_en)
     elif m_de:
         categoria = _normalizar_categoria(m_de.group(1))
+
+    if cuenta is None:
+        cuenta = CUENTA_DEFAULT
 
     return monto, categoria, texto.strip(), cuenta, fecha
 

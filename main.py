@@ -23,9 +23,11 @@ API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 _UPDATES_PROCESADOS = set()
 _UPDATES_MAX = 500
 
-# Cuando el bot no esta seguro de la categoria, pregunta y espera la
-# respuesta en el proximo mensaje de ese chat, en vez de adivinar.
-# chat_id -> {"monto":, "descripcion":, "cuenta":, "fecha":, "ts": epoch}
+# Cuando el bot no esta seguro de la categoria, ya guarda el gasto como
+# "Sin categoria" (para no perder plata si el servidor se reinicia) y solo
+# recuerda que esta esperando la respuesta, para corregir la categoria del
+# ULTIMO gasto cuando llegue el proximo mensaje de ese chat.
+# chat_id -> {"ts": epoch}
 _PENDIENTE_CATEGORIA = {}
 _PENDIENTE_TTL_SEG = 10 * 60
 
@@ -114,6 +116,16 @@ def cmd_rendimiento(texto_args):
         return "Usá: /rendimiento 8000"
     db.registrar_rendimiento(monto)
     return f"Anotado: este mes lo invertido rindió ${monto:,.2f}."
+
+
+def cmd_recalcularsaldos():
+    anteriores, nuevos = db.recalcular_saldos_desde_historial()
+    lineas = ["<b>Saldos recalculados desde todo lo anotado:</b>"]
+    for cuenta, nuevo in nuevos.items():
+        antes = anteriores.get(cuenta, 0.0)
+        lineas.append(f"• {cuenta}: ${antes:,.2f} → ${nuevo:,.2f}")
+    lineas.append("\n(Invertido no se tocó, se carga aparte con /invertir)")
+    return "\n".join(lineas)
 
 
 def cmd_transferir(texto_args):
@@ -392,6 +404,8 @@ def webhook():
             respuesta = cmd_invertir(args)
         elif comando == "/rendimiento":
             respuesta = cmd_rendimiento(args)
+        elif comando == "/recalcularsaldos":
+            respuesta = cmd_recalcularsaldos()
         elif comando == "/transferir":
             respuesta = cmd_transferir(args)
         elif comando == "/pendiente":
@@ -417,12 +431,14 @@ def webhook():
         else:
             respuesta = "No conozco ese comando. Probá /help"
     elif es_respuesta_categoria:
-        pendiente = _PENDIENTE_CATEGORIA.pop(chat_id)
+        _PENDIENTE_CATEGORIA.pop(chat_id, None)
         categoria = normalizar_categoria(texto.strip())
-        db.agregar_gasto(pendiente["monto"], categoria, pendiente["descripcion"],
-                          pendiente["cuenta"], fecha=pendiente["fecha"])
-        aviso_fecha = f" (fecha {pendiente['fecha'].strftime('%d/%m/%Y')})" if pendiente["fecha"] else ""
-        respuesta = f"Anotado: ${pendiente['monto']:,.2f} en {categoria} ({pendiente['cuenta']}){aviso_fecha}."
+        resultado, _total = db.corregir_gasto("ultimo", None, nueva_categoria=categoria)
+        if resultado is None:
+            respuesta = "No encontré el gasto para corregirle la categoría."
+        else:
+            vieja, nueva = resultado
+            respuesta = f"Listo, categoría actualizada: ${nueva['monto']:,.2f} en {categoria} ({nueva['cuenta']})."
     elif es_ahorro(texto):
         monto = parsear_monto(texto)
         if monto is None:
@@ -463,16 +479,14 @@ def webhook():
                          "Escribí algo como: <i>gaste 500 en comida</i>")
         else:
             monto, categoria, descripcion, cuenta, fecha = resultado
+            db.agregar_gasto(monto, categoria, descripcion, cuenta, fecha=fecha)
+            aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
             if categoria == "Sin categoria":
-                _PENDIENTE_CATEGORIA[chat_id] = {
-                    "monto": monto, "descripcion": descripcion, "cuenta": cuenta,
-                    "fecha": fecha, "ts": time.time(),
-                }
-                respuesta = (f"¿En qué categoría anoto este gasto de ${monto:,.2f} ({cuenta})?\n"
-                             "Respondé solo con la categoría (ej: <i>comida</i>).")
+                _PENDIENTE_CATEGORIA[chat_id] = {"ts": time.time()}
+                respuesta = (f"Anotado: ${monto:,.2f} en Sin categoria ({cuenta}){aviso_fecha}.\n"
+                             f"¿En qué categoría lo dejo? Respondé solo con la categoría (ej: <i>comida</i>).")
             else:
-                db.agregar_gasto(monto, categoria, descripcion, cuenta, fecha=fecha)
-                aviso_fecha = f" (fecha {fecha.strftime('%d/%m/%Y')})" if fecha else ""
+                respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta}){aviso_fecha}."
                 respuesta = f"Anotado: ${monto:,.2f} en {categoria} ({cuenta}){aviso_fecha}."
 
     enviar_mensaje(respuesta, chat_id)

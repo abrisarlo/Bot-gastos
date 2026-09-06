@@ -585,6 +585,60 @@ def transferir(monto: float, origen: str, destino: str):
     modificar_saldo(destino, monto)
 
 
+def recalcular_saldos_desde_historial():
+    """Reconstruye los saldos de Efectivo/Galicia/Mercado Pago/Wallbit/Cuenta DNI
+    sumando y restando TODO lo que ya esta anotado (gastos, ingresos y
+    transferencias en todas las hojas de mes). No toca 'Invertido' porque
+    eso no tiene un historial propio, es un saldo que se carga directo con
+    /invertir. Devuelve (saldos_anteriores, saldos_nuevos)."""
+    sh = _spreadsheet()
+    cuentas_a_recalcular = ["Efectivo", "Galicia", "Mercado Pago", "Wallbit", "Cuenta DNI"]
+    saldos = {c: 0.0 for c in cuentas_a_recalcular}
+
+    nombres_mes = [ws.title for ws in sh.worksheets()
+                   if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS, TRANSFERENCIAS, POR_COBRAR)]
+
+    for nombre in nombres_mes:
+        ws = sh.worksheet(nombre)
+
+        for g in _todos_los_gastos(ws):
+            cuenta = g["cuenta"] or "Efectivo"
+            saldos[cuenta] = saldos.get(cuenta, 0.0) - g["monto"]
+
+        ingresos = ws.get("M2:P1000", value_render_option="UNFORMATTED_VALUE")
+        for fila in ingresos:
+            if not fila or fila[0] == "":
+                continue
+            fila = fila + ["", "", "", ""]
+            monto, cuenta = fila[1], (fila[2] or "Efectivo")
+            if monto == "":
+                continue
+            saldos[cuenta] = saldos.get(cuenta, 0.0) + _a_float(monto)
+
+    filas_t = _hoja_transferencias(sh).get("A2:D1000", value_render_option="UNFORMATTED_VALUE")
+    for fila in filas_t:
+        if not fila or fila[0] == "":
+            continue
+        fila = fila + ["", "", "", ""]
+        monto, origen, destino = fila[1], fila[2], fila[3]
+        if monto == "" or not origen or not destino:
+            continue
+        monto = _a_float(monto)
+        saldos[origen] = saldos.get(origen, 0.0) - monto
+        saldos[destino] = saldos.get(destino, 0.0) + monto
+
+    anteriores = dict(obtener_saldos())
+    ws_cuentas = _hoja_cuentas(sh)
+    for cuenta, nuevo_saldo in saldos.items():
+        fila = _fila_cuenta(ws_cuentas, cuenta)
+        if fila is None:
+            ws_cuentas.append_row([cuenta, nuevo_saldo], value_input_option="USER_ENTERED", table_range="A1")
+        else:
+            ws_cuentas.update(values=[[nuevo_saldo]], range_name=f"B{fila}")
+
+    return anteriores, saldos
+
+
 # ---------- Rendimientos de lo invertido ----------
 
 def _hoja_rendimientos(sh):
