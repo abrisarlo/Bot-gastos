@@ -128,6 +128,22 @@ def cmd_recalcularsaldos():
     return "\n".join(lineas)
 
 
+def cmd_detallesaldo(texto_args):
+    cuenta = buscar_cuenta(texto_args.strip())
+    if not cuenta:
+        return "Usá: /detallesaldo galicia (o efectivo, mercado pago, wallbit, cuenta dni)"
+    d = db.detalle_cuenta(cuenta)
+    return (
+        f"<b>Desglose de {d['cuenta']}:</b>\n"
+        f"Ingresos: +${d['total_ingresos']:,.2f} ({d['cant_ingresos']} filas)\n"
+        f"Gastos: -${d['total_gastos']:,.2f} ({d['cant_gastos']} filas)\n"
+        f"Transferencias recibidas: +${d['total_transf_entrante']:,.2f}\n"
+        f"Transferencias enviadas: -${d['total_transf_saliente']:,.2f} ({d['cant_transf']} transferencias en total)\n"
+        f"<b>Saldo según esta cuenta: ${d['saldo_calculado']:,.2f}</b>\n"
+        f"Saldo actual guardado en Cuentas: ${d['saldo_actual_en_cuentas']:,.2f}"
+    )
+
+
 def cmd_transferir(texto_args):
     """Formato de respaldo: /transferir monto origen destino (ej: /transferir 5000 efectivo galicia)"""
     partes = texto_args.split()
@@ -406,6 +422,8 @@ def webhook():
             respuesta = cmd_rendimiento(args)
         elif comando == "/recalcularsaldos":
             respuesta = cmd_recalcularsaldos()
+        elif comando == "/detallesaldo":
+            respuesta = cmd_detallesaldo(args)
         elif comando == "/transferir":
             respuesta = cmd_transferir(args)
         elif comando == "/pendiente":

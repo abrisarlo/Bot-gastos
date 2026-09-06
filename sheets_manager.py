@@ -585,6 +585,71 @@ def transferir(monto: float, origen: str, destino: str):
     modificar_saldo(destino, monto)
 
 
+def detalle_cuenta(cuenta: str):
+    """Desglose transparente de como se arma el saldo de UNA cuenta: cuanto
+    entra y sale por gastos, ingresos y transferencias, hoja por hoja, para
+    poder auditar a mano un numero que no cierra."""
+    sh = _spreadsheet()
+    nombres_mes = [ws.title for ws in sh.worksheets()
+                   if ws.title not in (PENDIENTES, CUENTAS, RENDIMIENTOS, TRANSFERENCIAS, POR_COBRAR)]
+
+    total_gastos = 0.0
+    cant_gastos = 0
+    total_ingresos = 0.0
+    cant_ingresos = 0
+
+    for nombre in nombres_mes:
+        ws = sh.worksheet(nombre)
+        for g in _todos_los_gastos(ws):
+            if (g["cuenta"] or "Efectivo") == cuenta:
+                total_gastos += g["monto"]
+                cant_gastos += 1
+
+        ingresos = ws.get("M2:P1000", value_render_option="UNFORMATTED_VALUE")
+        for fila in ingresos:
+            if not fila or fila[0] == "":
+                continue
+            fila = fila + ["", "", "", ""]
+            monto, c = fila[1], (fila[2] or "Efectivo")
+            if monto == "" or c != cuenta:
+                continue
+            total_ingresos += _a_float(monto)
+            cant_ingresos += 1
+
+    total_transf_entrante = 0.0
+    total_transf_saliente = 0.0
+    cant_transf = 0
+    filas_t = _hoja_transferencias(sh).get("A2:D1000", value_render_option="UNFORMATTED_VALUE")
+    for fila in filas_t:
+        if not fila or fila[0] == "":
+            continue
+        fila = fila + ["", "", "", ""]
+        monto, origen, destino = fila[1], fila[2], fila[3]
+        if monto == "":
+            continue
+        monto = _a_float(monto)
+        if origen == cuenta:
+            total_transf_saliente += monto
+            cant_transf += 1
+        if destino == cuenta:
+            total_transf_entrante += monto
+            cant_transf += 1
+
+    saldo_calculado = total_ingresos - total_gastos + total_transf_entrante - total_transf_saliente
+    saldo_actual = dict(obtener_saldos()).get(cuenta, 0.0)
+
+    return {
+        "cuenta": cuenta,
+        "total_gastos": total_gastos, "cant_gastos": cant_gastos,
+        "total_ingresos": total_ingresos, "cant_ingresos": cant_ingresos,
+        "total_transf_entrante": total_transf_entrante,
+        "total_transf_saliente": total_transf_saliente,
+        "cant_transf": cant_transf,
+        "saldo_calculado": saldo_calculado,
+        "saldo_actual_en_cuentas": saldo_actual,
+    }
+
+
 def recalcular_saldos_desde_historial():
     """Reconstruye los saldos de Efectivo/Galicia/Mercado Pago/Wallbit/Cuenta DNI
     sumando y restando TODO lo que ya esta anotado (gastos, ingresos y
